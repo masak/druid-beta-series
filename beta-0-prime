@@ -1,0 +1,103 @@
+#! /usr/bin/perl -w
+use 5.010;
+use strict;
+
+my $N = 8;
+my @color  = map { [map { 0 } 1..$N] } 1..$N;
+my @height = map { [map { 0 } 1..$N] } 1..$N;
+
+sub nice_pos { chr(ord("a") + $_[1] - 1) . $_[0] }
+
+my %h_graph;
+for my $row (1..$N) {
+    for my $column (1..$N) {
+        $h_graph{nice_pos($row, $column)} = [
+            $row > 1     ? nice_pos($row - 1, $column) : (),
+            $row < $N    ? nice_pos($row + 1, $column) : (),
+            $column > 1  ? nice_pos($row, $column - 1) : 'alpha',
+            $column < $N ? nice_pos($row, $column + 1) : 'omega',
+        ];
+    }
+}
+$h_graph{'alpha'} = [map { nice_pos($_, 1 ) } 1..$N];
+$h_graph{'omega'} = [map { nice_pos($_, $N) } 1..$N];
+
+my %v_graph;
+for my $row (1..$N) {
+    for my $column (1..$N) {
+        $v_graph{nice_pos($row, $column)} = [
+            $row > 1     ? nice_pos($row - 1, $column) : 'alpha',
+            $row < $N    ? nice_pos($row + 1, $column) : 'omega',
+            $column > 1  ? nice_pos($row, $column - 1) : (),
+            $column < $N ? nice_pos($row, $column + 1) : (),
+        ];
+    }
+}
+$v_graph{'alpha'} = [map { nice_pos(1,  $_) } 1..$N];
+$v_graph{'omega'} = [map { nice_pos($N, $_) } 1..$N];
+
+sub meandering_path {
+    my ($graph, $player) = @_;
+
+    my $SOURCE = 'alpha';
+    my $SINK = 'omega';
+
+    my $opponent = $player eq "V" ? "H" : "V";
+
+    my %distances = ($SOURCE => 0);
+    my %backrefs;
+    my @queue = @{$graph->{$SOURCE}};
+    while (@queue) {
+        my $node = splice @queue, int(rand(@queue)), 1;
+        for my $neighbor (@{$graph->{$node}}) {
+            if (exists($distances{$neighbor})) {
+                if ($neighbors_min_distance > $distances{$neighbor}) {
+                    $neighbors_min_distance = $distances{$neighbor};
+                    $backrefs{$node} = [$neighbor];
+                }
+                elsif ($neighbors_min_distance == $distances{$neighbor}) {
+                    push @{$backrefs{$node}}, $neighbor;
+                }
+            }
+            else {
+                if (!grep { $_ eq $neighbor } @queue) {
+                    push @queue, $neighbor;
+                }
+            }
+        }
+        $distances{$node} = $neighbors_min_distance + $punishment;
+    }
+
+    return () unless exists $distances{$SINK};
+
+    my %saved_distances;
+    @queue = $SINK;
+    while (@queue) {
+        my $node = shift @queue;
+        next if exists $saved_distances{$node};
+        $saved_distances{$node} = $distances{$node};
+        push @queue, @{$backrefs{$node} // []};
+    }
+    delete @saved_distances{$SOURCE, $SINK};
+
+    return keys %saved_distances;
+}
+
+while (1) {
+    my @v_meandering_path = meandering_path(\%v_graph, "V");
+
+    print "\n";
+    print "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+          "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+          "\n";
+    for my $row (reverse 1..$N) {
+        printf " %2d ", $row;
+        print map { (grep { $_ eq nice_pos($row, $column) } , " " } 1..$N;
+        printf " %2d ", $row;
+        print map { $_, " " } 1..$N;
+        print "\n";
+    }
+    print "\n";
+
+    die;
+}

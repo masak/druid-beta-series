@@ -1,0 +1,82 @@
+#! /opt/perl/bin/perl -w
+use 5.010;
+use strict;
+
+package Game;
+
+use Moose;
+
+use MooseX::Types::Moose qw/Int ArrayRef/;
+
+our $NONE       = 0;
+our $VERTICAL   = 1;
+our $HORIZONTAL = 2;
+
+has 'size'    => (is => 'ro', isa => Int, required => 1);
+
+has 'colors'  => (is => 'rw', isa => ArrayRef);
+
+has 'heights' => (is => 'rw', isa => ArrayRef);
+
+sub BUILD {
+    my ($self) = @_;
+
+    $self->colors( [map { [(0) x $self->size] } 1..$self->size]);
+    $self->heights([map { [(0) x $self->size] } 1..$self->size]);
+}
+
+sub is_sarsen_move {
+    my ($move) = @_;
+
+    return lc($move) =~ m[ ^ [a-z] \d+ $ ]x;
+}
+
+sub human_to_zerobased {
+    my ($move) = @_;
+
+    my $column = ord(lc substr($move, 0, 1)) - ord("a");
+    my $row = substr($move, 1) - 1;
+
+    return ($row, $column);
+}
+
+sub make_move {
+    my ($self, $move, $color) = @_;
+
+    if (is_sarsen_move($move)) {
+        my ($row, $column) = human_to_zerobased($move);
+
+        die "Out of range: ($row, $column)"
+            if $row < 0 || $row >= $self->size
+               || $column < 0 || $column >= $self->size;
+
+        my $colors = $self->colors;
+        $colors->[$row][$column] = $color;
+        $self->colors($colors);
+
+        my $heights = $self->heights;
+        ++$heights->[$row][$column];
+        $self->heights($heights);
+    }
+    else {
+        die "Unknown move type: $move";
+    }
+
+    return;
+}
+
+sub virtual_lintel {
+    return 0;
+}
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
+
+package Game::Test;
+
+use Test::More tests => 1;
+
+my $game = Game->new(size => 5);
+$game->make_move("c3", $Game::VERTICAL);
+ok $game->virtual_lintel("c3-c5"),
+    "Placing an isolated sarsen creates a virtual bridge lintel";

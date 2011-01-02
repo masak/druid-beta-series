@@ -1,0 +1,527 @@
+#! /usr/bin/perl -w
+use 5.010;
+use strict;
+
+my $DEBUG = 0;
+
+my $N = 8;
+my @color  = map { [map { 0 } 1..$N] } 1..$N;
+my @height = map { [map { 0 } 1..$N] } 1..$N;
+
+sub nice_pos { chr(ord("a") + $_[1] - 1) . $_[0] }
+
+my %h_graph;
+for my $row (1..$N) {
+    for my $column (1..$N) {
+        $h_graph{nice_pos($row, $column)} = [
+            $row > 1     ? nice_pos($row - 1, $column) : (),
+            $row < $N    ? nice_pos($row + 1, $column) : (),
+            $column > 1  ? nice_pos($row, $column - 1) : 'alpha',
+            $column < $N ? nice_pos($row, $column + 1) : 'omega',
+        ];
+    }
+}
+$h_graph{'alpha'} = [map { nice_pos($_, 1 ) } 1..$N];
+$h_graph{'omega'} = [map { nice_pos($_, $N) } 1..$N];
+
+my %v_graph;
+for my $row (1..$N) {
+    for my $column (1..$N) {
+        $v_graph{nice_pos($row, $column)} = [
+            $row > 1     ? nice_pos($row - 1, $column) : 'alpha',
+            $row < $N    ? nice_pos($row + 1, $column) : 'omega',
+            $column > 1  ? nice_pos($row, $column - 1) : (),
+            $column < $N ? nice_pos($row, $column + 1) : (),
+        ];
+    }
+}
+$v_graph{'alpha'} = [map { nice_pos(1,  $_) } 1..$N];
+$v_graph{'omega'} = [map { nice_pos($N, $_) } 1..$N];
+
+my @empty_hlintel = map { [map { 0 } 1..$N-2] } 1..$N;
+my @empty_vlintel = map { [map { 0 } 1..$N  ] } 1..$N-2;
+
+my @hdeltas = (
+    [-1, 0], [-1, 1], [-1, 2],
+    [0, -1], [0, 0], [0, 1], [0, 2], [0, 3],
+    [1, 0], [1, 1], [1, 2],
+);
+
+my @vdeltas = (
+    [0, -1], [1, -1], [2, -1],
+    [-1, 0], [0, 0], [1, 0], [2, 0], [3, 0],
+    [0, 1], [1, 1], [2, 1]
+);
+
+sub remove_neighbor {
+    my ($graph, $node, $neighbor) = @_;
+
+    $graph->{$node} = [grep { $_ ne $neighbor } @{$graph->{$node}}];
+}
+
+sub add_neighbor {
+    my ($graph, $node, $neighbor) = @_;
+
+    unless (grep { $_ eq $neighbor } @{$graph->{$node}}) {
+        push @{$graph->{$node}}, $neighbor;
+    }
+}
+
+sub connect_nodes {
+    my ($graph, $node1, $node2) = @_;
+
+    add_neighbor($graph, $node1, $node2);
+    add_neighbor($graph, $node2, $node1);
+}
+
+sub do_for_all {
+    my ($neighbor_ref, $graph, $fixed_pos, $row, $column, $callback) = @_;
+
+    for my $delta (@$neighbor_ref) {
+        my ($nrow, $ncolumn) = ($row + $delta->[0], $column + $delta->[1]);
+        next if $nrow < 0;
+        next if $nrow >= $N;
+        next if $ncolumn < 0;
+        next if $ncolumn >= $N;
+        my $npos = nice_pos($nrow + 1, $ncolumn + 1);
+        $callback->($graph, $npos, $fixed_pos);
+    }
+}
+
+sub update_empty_hlintel {
+    my ($row, $column) = @_;
+
+    my ($c1, $c2, $c3) = map {  $color[$row][$_] } $column..$column+2;
+    my ($h1, $h2, $h3) = map { $height[$row][$_] } $column..$column+2;
+    
+    my $empty_lintel_now
+        = $h1 == $h3
+          && (($h2 < $h1 && $c1 eq $c3)
+              || ($h1 == $h2 && (   $c1 eq $c2 && $c2 ne $c3
+                                 || $c2 eq $c3 && $c3 ne $c1
+                                 || $c3 eq $c1 && $c1 ne $c2)));
+    my $empty_lintel_before = $empty_hlintel[$row][$column];
+    my $lintel_owner
+        = $h2 < $h1  ? $c1
+        : $c1 eq $c2 ? $c1
+        : $c2 eq $c3 ? $c2 
+        :              $c3;
+
+    my $lintel_pos = join '-', map { nice_pos($_->[0] + 1, $_->[1] + 1) }
+                                   [$row, $column], [$row, $column + 2];
+    if ($empty_lintel_before && !$empty_lintel_now) {
+        if ($DEBUG) {
+            say "Removing empty vlintel ", $lintel_pos;
+        }
+        my $graph
+            = $empty_hlintel[$row][$column] eq 'H' ? \%h_graph : \%v_graph;
+        do_for_all(\@hdeltas, $graph, $lintel_pos, $row, $column,
+                   sub { goto &remove_neighbor });
+        remove_neighbor($graph, 'alpha', $lintel_pos);
+        remove_neighbor($graph, 'omega', $lintel_pos);
+        delete $graph->{$lintel_pos};
+    }
+    elsif (!$empty_lintel_before && $empty_lintel_now) {
+        if ($DEBUG) {
+            say "Adding empty vlintel ", $lintel_pos, " for ", $lintel_owner;
+        }
+        my $graph = $lintel_owner eq 'H' ? \%h_graph : \%v_graph;
+        do_for_all(\@hdeltas, $graph, $lintel_pos, $row, $column,
+                   sub { goto &connect_nodes });
+        if ($lintel_owner eq 'H' && $column == 0
+            || $lintel_owner eq 'V' && $row == 0) {
+            connect_nodes($graph, 'alpha', $lintel_pos);
+        }
+        if ($lintel_owner eq 'H' && $column == $N - 3
+            || $lintel_owner eq 'V' && $row == $N - 1) {
+            connect_nodes($graph, 'omega', $lintel_pos);
+        }
+    }
+    $empty_hlintel[$row][$column] = $empty_lintel_now && $lintel_owner;
+    return;
+}
+
+sub update_empty_vlintel {
+    my ($row, $column) = @_;
+
+    my ($c1, $c2, $c3) = map {  $color[$_][$column] } $row..$row+2;
+    my ($h1, $h2, $h3) = map { $height[$_][$column] } $row..$row+2;
+
+    my $empty_lintel_now
+        = $h1 == $h3
+          && (($h2 < $h1 && $c1 eq $c3)
+              || ($h1 == $h2 && (   $c1 eq $c2 && $c2 ne $c3
+                                 || $c2 eq $c3 && $c3 ne $c1
+                                 || $c3 eq $c1 && $c1 ne $c2)));
+    my $empty_lintel_before = $empty_vlintel[$row][$column];
+    my $lintel_owner
+        = $h2 < $h1  ? $c1
+        : $c1 eq $c2 ? $c1
+        : $c2 eq $c3 ? $c2 
+        :              $c3;
+
+    my $lintel_pos = join '-', map { nice_pos($_->[0] + 1, $_->[1] + 1) }
+                                   [$row, $column], [$row + 2, $column];
+    if ($empty_lintel_before && !$empty_lintel_now) {
+        if ($DEBUG) {
+            say "Removing empty vlintel ", $lintel_pos;
+        }
+        my $graph
+            = $empty_vlintel[$row][$column] eq 'H' ? \%h_graph : \%v_graph;
+        do_for_all(\@vdeltas, $graph, $lintel_pos, $row, $column,
+                   sub { goto &remove_neighbor });
+        remove_neighbor($graph, 'alpha', $lintel_pos);
+        remove_neighbor($graph, 'omega', $lintel_pos);
+        delete $graph->{$lintel_pos};
+    }
+    elsif (!$empty_lintel_before && $empty_lintel_now) {
+        if ($DEBUG) {
+            say "Adding empty vlintel ", $lintel_pos, " for ", $lintel_owner;
+        }
+        my $graph = $lintel_owner eq 'H' ? \%h_graph : \%v_graph;
+        do_for_all(\@vdeltas, $graph, $lintel_pos, $row, $column,
+                   sub { goto &connect_nodes });
+        if ($lintel_owner eq 'H' && $column == 0
+            || $lintel_owner eq 'V' && $row == 0) {
+            connect_nodes($graph, 'alpha', $lintel_pos);
+        }
+        if ($lintel_owner eq 'H' && $column == $N - 1
+            || $lintel_owner eq 'V' && $row == $N - 3) {
+            connect_nodes($graph, 'omega', $lintel_pos);
+        }
+    }
+    $empty_vlintel[$row][$column] = $empty_lintel_now && $lintel_owner;
+    return;
+}
+
+sub update_empty_lintels_after_sarsen_move {
+    my ($row, $column) = @_;
+
+    # horizontal lintels
+    for my $lcolumn ($column-2..$column) {
+        next if $lcolumn < 0;
+        next if $lcolumn >= $N - 2;
+
+        update_empty_hlintel($row, $lcolumn);
+    }
+
+    # vertical lintels
+    for my $lrow ($row-2..$row) {
+        next if $lrow < 0;
+        next if $lrow >= $N - 2;
+
+        update_empty_vlintel($lrow, $column);
+    }
+}
+
+sub update_empty_lintels_after_hlintel_move {
+    my ($row, $column) = @_;
+
+    # horizontal lintels
+    for my $lcolumn ($column-2..$column+2) {
+        next if $lcolumn < 0;
+        next if $lcolumn >= $N - 2;
+
+        update_empty_hlintel($row, $lcolumn);
+    }
+
+    # vertical lintels
+    for my $lrow ($row-2..$row) {
+        next if $lrow < 0;
+        next if $lrow >= $N - 2;
+
+        for my $lcolumn ($column..$column+2) {
+            update_empty_vlintel($lrow, $lcolumn);
+        }
+    }
+}
+
+sub update_empty_lintels_after_vlintel_move {
+    my ($row, $column) = @_;
+
+    # horizontal lintels
+    for my $lcolumn ($column-2..$column) {
+        next if $lcolumn < 0;
+        next if $lcolumn >= $N - 2;
+
+        for my $lrow ($row..$row+2) {
+            update_empty_hlintel($lrow, $lcolumn);
+        }
+    }
+
+    # vertical lintels
+    for my $lrow ($row-2..$row+2) {
+        next if $lrow < 0;
+        next if $lrow >= $N - 2;
+
+        update_empty_vlintel($lrow, $column);
+    }
+}
+
+sub min { $_[0] < $_[1] ? $_[0] : $_[1] }
+
+sub pick { $_[int rand @_] }
+
+sub shortest_paths {
+    my ($graph, $player) = @_;
+
+    my $SOURCE = 'alpha';
+    my $SINK = 'omega';
+
+    my $opponent = $player eq "V" ? "H" : "V";
+
+    my %distances = ($SOURCE => 0);
+    my %backrefs;
+    my @queue = @{$graph->{$SOURCE}};
+    while (@queue) {
+        my $node = shift @queue;
+        my $punishment = 1;
+        if ($node =~ m[^ ([a-zA-Z])(\d+) $]x) {
+            my $row = $2 - 1;
+            my $column = ord(lc $1) - ord("a");
+            next if $color[$row][$column] eq $opponent;
+            if ($color[$row][$column]) {
+                $punishment = 0;
+            }
+        }
+        my $neighbors_min_distance = $N * $N;
+        for my $neighbor (@{$graph->{$node}}) {
+            if (exists($distances{$neighbor})) {
+                if ($neighbors_min_distance > $distances{$neighbor}) {
+                    $neighbors_min_distance = $distances{$neighbor};
+                    $backrefs{$node} = [$neighbor];
+                }
+                elsif ($neighbors_min_distance == $distances{$neighbor}) {
+                    push @{$backrefs{$node}}, $neighbor;
+                }
+            }
+            else {
+                if (!grep { $_ eq $neighbor } @queue) {
+                    push @queue, $neighbor;
+                }
+            }
+        }
+        $distances{$node} = $neighbors_min_distance + $punishment;
+    }
+
+    return () unless exists $distances{$SINK};
+
+    my %saved_distances;
+    @queue = $SINK;
+    while (@queue) {
+        my $node = shift @queue;
+        next if exists $saved_distances{$node};
+        $saved_distances{$node} = $distances{$node};
+        push @queue, @{$backrefs{$node} // []};
+    }
+    delete @saved_distances{$SOURCE, $SINK};
+
+    return keys %saved_distances;
+}
+
+sub overlap {
+    my ($node1, $node2) = @_;
+
+    my @nodeset1;
+    if ($node1 =~ m[^ ([a-zA-Z])(\d+) $]x) {
+        push @nodeset1, $node1;
+    }
+    elsif ($node1 =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x) {
+        my $node_row1 = $2;
+        my $node_column1 = ord(lc $1) - ord("a") + 1;
+        my $node_row3 = $4;
+        my $node_column3 = ord(lc $3) - ord("a") + 1;
+        my $node_row2 = ($node_row1 + $node_row3) / 2;
+        my $node_column2 = ($node_column1 + $node_column3) / 2;
+        push @nodeset1,
+                nice_pos($node_row1, $node_column1),
+                nice_pos($node_row2, $node_column2),
+                nice_pos($node_row3, $node_column3);
+    }
+
+    my %nodeset2;
+    if ($node2 =~ m[^ ([a-zA-Z])(\d+) $]x) {
+        $nodeset2{$node2}++;
+    }
+    elsif ($node2 =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x) {
+        my $node_row1 = $2;
+        my $node_column1 = ord(lc $1) - ord("a") + 1;
+        my $node_row3 = $4;
+        my $node_column3 = ord(lc $3) - ord("a") + 1;
+        my $node_row2 = ($node_row1 + $node_row3) / 2;
+        my $node_column2 = ($node_column1 + $node_column3) / 2;
+        $nodeset2{$_}++ for
+            nice_pos($node_row1, $node_column1),
+            nice_pos($node_row2, $node_column2),
+            nice_pos($node_row3, $node_column3);
+    }
+
+    return !! grep { $nodeset2{$_} } @nodeset1;
+}
+
+sub is_part_of_lintel {
+    my ($row, $column, $node) = @_;
+
+    return unless $node =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x;
+    return overlap(nice_pos($row, $column), $node);
+}
+
+MOVE:
+while (1) {
+    {
+        my @v_shortest_paths = shortest_paths(\%v_graph, "V");
+        my @h_shortest_paths = shortest_paths(\%h_graph, "H");
+
+        if ($DEBUG) {
+            print "\n";
+            print "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+                  "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+                  "\n";
+            for my $row (reverse 1..$N) {
+                printf " %2d ", $row;
+                print map { my $column = $_; (grep { is_part_of_lintel($row, $column, $_) } @v_shortest_paths) && '+' || (grep { $_ eq nice_pos($row, $column) } @v_shortest_paths) && ($color[$row-1][$column-1] || "*") || ".", " " } 1..$N;
+                printf " %2d ", $row;
+                print map { my $column = $_; (grep { is_part_of_lintel($row, $column, $_) } @h_shortest_paths) && '+' || (grep { $_ eq nice_pos($row, $column) } @h_shortest_paths) && ($color[$row-1][$column-1] || "*") || ".", " " } 1..$N;
+                print "\n";
+            }
+            print "\n";
+        }
+
+        my @possible_moves;
+        for my $v (@v_shortest_paths) {
+            if (grep { overlap($v, $_) } @h_shortest_paths) {
+                push @possible_moves, $v;
+            }
+        }
+        die "No moves to choose from. Giving up.\n"
+            unless @possible_moves;
+
+        my $p = "V";
+        my $move = pick(@possible_moves);
+        print "Vertical makes move $move\n";
+        if ($move =~ m[^ ([a-zA-Z])(\d+) $]x) {
+            my $row = $2 - 1;
+            my $column = ord(lc $1) - ord("a");
+
+            $color[$row][$column] = $p;
+            ++$height[$row][$column];
+
+            update_empty_lintels_after_sarsen_move($row, $column);
+        }
+        elsif ($move =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x) {
+            my ($row, $row2) = ($2 - 1, $4 - 1);
+            my ($column, $column2) = (ord(lc $1) - ord("a"),
+                                       ord(lc $3) - ord("a"));
+
+            if ($row == $row2) {
+                my $new_height = $height[$row][$column] + 1;
+                $height[$row][$_] = $new_height for $column..$column+2;
+                $color[$row][$_]  = $p          for $column..$column+2;
+
+                update_empty_lintels_after_hlintel_move($row, $column);
+            }
+            else {
+                my $new_height = $height[$row][$column] + 1;
+                $height[$_][$column] = $new_height for $row..$row+2;
+                $color[$_][$column]  = $p          for $row..$row+2;
+
+                update_empty_lintels_after_vlintel_move($row, $column);
+            }
+        }
+        else {
+            die "Unrecognized move $move";
+        }
+    }
+
+    print "\n";
+    print "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+          "    ", (map { "$_ " } "A"..chr(ord("A")+$N-1)),
+          "\n";
+    for my $row (reverse 1..$N) {
+        printf " %2d ", $row;
+        print map { $color[$row-1][$_-1] || ".", " " } 1..$N;
+        printf " %2d ", $row;
+        print map { $height[$row-1][$_-1] || ".", " " } 1..$N;
+        print "\n";
+    }
+    print "\n";
+
+    my $player_on_turn = 'horizontal';
+    my $p = uc substr $player_on_turn, 0, 1;
+    my $move;
+    INPUT:
+    while (1) {
+        print $player_on_turn, '> ';
+        $move = <>;
+        if (!defined $move) {
+            print "\n";
+            last MOVE;
+        }
+        chomp $move;
+
+        my ($row1, $row2, $column1, $column2);
+        if ($move =~ m[^ \s* $]x) {
+            next INPUT;
+        }
+        elsif ($move =~ m[^ ([a-zA-Z])(\d+) $]x
+            && (my $row = $2) <= $N
+            && (my $column = ord(lc $1) - ord("a") + 1) <= $N) {
+
+            if ($color[$row-1][$column-1] ne 0
+                && $color[$row-1][$column-1] ne $p) {
+                say "That location is occupied by the opponent.";
+                next INPUT;
+            }
+            $color[$row-1][$column-1] = $p;
+            ++$height[$row-1][$column-1];
+
+            update_empty_lintels_after_sarsen_move($row-1, $column-1);
+
+            last INPUT;
+        }
+        elsif ($move =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x
+               && ($row1 = $2) <= $N
+               && ($row2 = $4) == $row1
+               && ($column1 = ord(lc $1) - ord("a") + 1) <= $N
+               && ($column2 = ord(lc $3) - ord("a") + 1) <= $N
+               && abs($column1 - $column2) == 2) {
+
+            my ($row, $column) = ($row1, min($column1, $column2));
+            if ($empty_hlintel[$row-1][$column-1] ne $p) {
+                say "Can't put a $p lintel there for whatever reason.";
+                next INPUT;
+            }
+            my $new_height = $height[$row-1][$column-1] + 1;
+            $height[$row-1][$_-1] = $new_height for $column..$column+2;
+            $color[$row-1][$_-1]  = $p          for $column..$column+2;
+
+            update_empty_lintels_after_hlintel_move($row-1, $column-1);
+
+            last INPUT;
+        }
+        elsif ($move =~ m[^ ([a-zA-Z])(\d+) - ([a-zA-Z])(\d+) $]x
+               && ($row1 = $2) <= $N
+               && ($row2 = $4) <= $N
+               && ($column1 = ord(lc $1) - ord("a") + 1) <= $N
+               && ($column2 = ord(lc $3) - ord("a") + 1) == $column1
+               && abs($row1 - $row2) == 2) {
+
+            my ($row, $column) = (min($row1, $row2), $column1);
+            if ($empty_vlintel[$row-1][$column-1] ne $p) {
+                say "Can't put a $p lintel there for whatever reason.";
+                next INPUT;
+            }
+            my $new_height = $height[$row-1][$column-1] + 1;
+            $height[$_-1][$column-1] = $new_height for $row..$row+2;
+            $color[$_-1][$column-1]  = $p          for $row..$row+2;
+
+            update_empty_lintels_after_vlintel_move($row-1, $column-1);
+
+            last INPUT;
+        }
+        else {
+            say "Unrecognized move.";
+            next INPUT;
+        }
+    }
+}
